@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>高雄市鼓山區與鹽埕區垃圾清運路線地圖</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <!-- PapaParse for client-side CSV parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0fdf4',
+              100: '#dcfce7',
+              500: '#22c55e',
+              600: '#16a34a',
+              700: '#15803d',
+              800: '#166534',
+              900: '#14532d',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f1f1;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    
+    /* Map Container Style */
+    #map {
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+    }
+
+    .leaflet-popup-content-wrapper {
+      border-radius: 12px;
+      padding: 0;
+      overflow: hidden;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+    }
+    .leaflet-popup-content {
+      margin: 0;
+      line-height: 1.5;
+    }
+
+    /* Pulse marker animation */
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.15); opacity: 0.4; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+    .active-marker-ring {
+      animation: pulse-ring 2s infinite ease-in-out;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans h-screen flex flex-col overflow-hidden">
+
+  <!-- Top Navigation Header -->
+  <header class="bg-brand-800 text-white shadow-md flex-none z-30">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <div class="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
+        <div class="flex items-center gap-2.5">
+          <div class="w-9 h-9 rounded-lg bg-brand-600 flex items-center justify-center text-white shadow-inner">
+            <i class="fa-solid fa-truck-ramp-box text-lg"></i>
+          </div>
+          <div>
+            <h1 class="text-base sm:text-lg font-bold leading-tight">高雄市鼓山區與鹽埕區垃圾清運地圖</h1>
+            <p class="text-xs text-brand-100 flex items-center gap-1">
+              <i class="fa-solid fa-database text-[10px]"></i> 依據官方 CSV 數據精準呈現
+            </p>
+          </div>
+        </div>
+        <!-- Mobile Stats Pill -->
+        <div class="sm:hidden text-xs bg-brand-900/60 px-2.5 py-1 rounded-full text-brand-100 border border-brand-600">
+          <span id="mobile-count">0</span> 筆清運點
+        </div>
+      </div>
+
+      <!-- Header Action Controls -->
+      <div class="flex items-center gap-2 w-full sm:w-auto justify-end">
+        <label for="csv-file-input" class="cursor-pointer bg-brand-600 hover:bg-brand-500 text-white text-xs sm:text-sm font-medium px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 shadow-sm border border-brand-500 active:scale-95">
+          <i class="fa-solid fa-file-csv"></i>
+          <span id="upload-btn-label">匯入 CSV 檔 (支援批量/多區檔)</span>
+          <input type="file" id="csv-file-input" accept=".csv,.txt" multiple class="hidden">
+        </label>
+        
+        <button id="toggle-route-btn" class="bg-brand-900 hover:bg-brand-700 text-brand-100 text-xs sm:text-sm font-medium px-3 py-2 rounded-lg transition-all flex items-center gap-1.5 border border-brand-700 shadow-sm">
+          <i class="fa-solid fa-route text-amber-400"></i>
+          <span class="hidden md:inline">清運動線：</span>
+          <span id="route-status-text">關閉</span>
+        </button>
+
+        <button id="btn-show-stats" class="bg-brand-900 hover:bg-brand-700 text-brand-100 p-2 rounded-lg transition-all border border-brand-700" title="統計資訊">
+          <i class="fa-solid fa-chart-pie"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Filter & Search Toolbar -->
+  <div class="bg-white border-b border-slate-200 shadow-sm flex-none z-20">
+    <div class="max-w-7xl mx-auto px-4 py-2.5 flex flex-wrap items-center gap-3">
+      
+      <!-- District Select -->
+      <div class="flex items-center gap-1.5">
+        <label class="text-xs font-semibold text-slate-500 flex items-center gap-1">
+          <i class="fa-solid fa-map-location-dot text-brand-600"></i> 行政區
+        </label>
+        <select id="district-select" class="text-xs sm:text-sm border border-slate-300 rounded-md px-2.5 py-1.5 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-brand-500 focus:outline-none transition-all">
+          <option value="">全區 (鼓山/鹽埕)</option>
+          <option value="鼓山區">鼓山區</option>
+          <option value="鹽埕區">鹽埕區</option>
+        </select>
+      </div>
+
+      <!-- Village Select -->
+      <div class="flex items-center gap-1.5">
+        <label class="text-xs font-semibold text-slate-500 flex items-center gap-1">
+          <i class="fa-solid fa-building-flag text-brand-600"></i> 村里
+        </label>
+        <select id="village-select" class="text-xs sm:text-sm border border-slate-300 rounded-md px-2.5 py-1.5 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-brand-500 focus:outline-none transition-all max-w-[130px]">
+          <option value="">全部村里</option>
+        </select>
+      </div>
+
+      <!-- Recycling Day Buttons -->
+      <div class="flex items-center gap-1.5">
+        <label class="text-xs font-semibold text-slate-500 hidden lg:flex items-center gap-1">
+          <i class="fa-solid fa-calendar-days text-brand-600"></i> 回收日
+        </label>
+        <div class="flex items-center gap-1" id="day-buttons">
+          <button data-day="一" class="day-btn px-2 py-1 text-xs border border-slate-200 rounded hover:bg-slate-100 transition-all font-medium text-slate-600">一</button>
+          <button data-day="二" class="day-btn px-2 py-1 text-xs border border-slate-200 rounded hover:bg-slate-100 transition-all font-medium text-slate-600">二</button>
+          <button data-day="三" class="day-btn px-2 py-1 text-xs border border-slate-200 rounded hover:bg-slate-100 transition-all font-medium text-slate-600">三</button>
+          <button data-day="四" class="day-btn px-2 py-1 text-xs border border-slate-200 rounded hover:bg-slate-100 transition-all font-medium text-slate-600">四</button>
+          <button data-day="五" class="day-btn px-2 py-1 text-xs border border-slate-200 rounded hover:bg-slate-100 transition-all font-medium text-slate-600">五</button>
+          <button data-day="六" class="day-btn px-2 py-1 text-xs border border-slate-200 rounded hover:bg-slate-100 transition-all font-medium text-slate-600">六</button>
+        </div>
+      </div>
+
+      <!-- Search Keyword Box -->
+      <div class="flex-1 min-w-[180px]">
+        <div class="relative">
+          <input type="text" id="search-input" placeholder="搜尋關鍵字 (例如：七賢路、壽山)" 
+                 class="w-full text-xs sm:text-sm pl-8 pr-3 py-1.5 border border-slate-300 rounded-md bg-slate-50 focus:bg-white focus:ring-2 focus:ring-brand-500 focus:outline-none transition-all">
+          <i class="fa-solid fa-magnifying-glass absolute left-2.5 top-2.5 text-xs text-slate-400"></i>
+        </div>
+      </div>
+
+      <!-- Reset Button -->
+      <button id="reset-btn" class="text-xs bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1.5 rounded-md transition-all font-medium flex items-center gap-1">
+        <i class="fa-solid fa-rotate-left"></i> 重設
+      </button>
+
+    </div>
+  </div>
+
+  <!-- Drop Zone Prompt Overlay -->
+  <div id="drop-overlay" class="hidden fixed inset-0 bg-brand-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-6 text-white text-center transition-all">
+    <div class="border-2 border-dashed border-white/60 rounded-2xl p-10 max-w-lg w-full flex flex-col items-center gap-4">
+      <i class="fa-solid fa-cloud-arrow-up text-5xl text-brand-300 animate-bounce"></i>
+      <h3 class="text-xl font-bold">拖放您的 CSV 檔案至此</h3>
+      <p class="text-sm text-brand-100">支援同時拖入鼓山區與鹽埕區的 CSV 檔案。系統將自動解析包含 Seq, 責任區, 車次, 回收日, 停留時間, 停留地點, 行政區, 村里, 經度, 緯度 之完整資料。</p>
+    </div>
+  </div>
+
+  <!-- Main View Area (Map + Sidebar) -->
+  <div class="flex-1 flex flex-col md:flex-row relative overflow-hidden">
+    
+    <!-- Map Container -->
+    <div class="flex-1 relative order-2 md:order-1 h-2/3 md:h-full">
+      <div id="map"></div>
+      
+      <!-- Map Layer Quick Controls Overlay -->
+      <div class="absolute top-3 right-3 z-20 flex flex-col gap-2 bg-white/95 backdrop-blur-sm p-2 rounded-xl shadow-md border border-slate-200 text-xs">
+        <button id="btn-locate-me" class="flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-slate-100 rounded-lg text-slate-700 transition-all font-medium">
+          <i class="fa-solid fa-crosshairs text-brand-600"></i> 定位我的位置
+        </button>
+        <button id="btn-fit-bounds" class="flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-slate-100 rounded-lg text-slate-700 transition-all font-medium">
+          <i class="fa-solid fa-expand text-brand-600"></i> 縮放至全部清運點
+        </button>
+      </div>
+
+      <!-- No Data Alert Box inside map -->
+      <div id="empty-state-notice" class="hidden absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-20 bg-white/95 backdrop-blur-md p-6 rounded-2xl shadow-xl border border-slate-200 max-w-sm text-center">
+        <i class="fa-solid fa-file-circle-exclamation text-4xl text-amber-500 mb-3"></i>
+        <h4 class="font-bold text-slate-800 text-base mb-1">查無符合條件的清運點</h4>
+        <p class="text-xs text-slate-500 mb-4">請嘗試調整篩選條件，或上傳您從官方下載的 CSV 檔案。</p>
+        <button onclick="document.getElementById('reset-btn').click()" class="bg-brand-600 text-white text-xs px-4 py-2 rounded-lg hover:bg-brand-700 transition-all font-medium">
+          重設所有條件
+        </button>
+      </div>
+    </div>
+
+    <!-- Sidebar Container -->
+    <aside class="w-full md:w-96 bg-white border-t md:border-t-0 md:border-l border-slate-200 flex flex-col order-1 md:order-2 h-1/3 md:h-full z-20 shadow-lg">
+      
+      <!-- Sidebar Header -->
+      <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-brand-500 inline-block"></span>
+          <h2 class="font-bold text-slate-700 text-sm">清運地點列表</h2>
+        </div>
+        <span id="list-count-badge" class="text-xs bg-brand-100 text-brand-800 font-semibold px-2.5 py-0.5 rounded-full border border-brand-200">
+          共 0 筆
+        </span>
+      </div>
+
+      <!-- Site List Container -->
+      <ul id="site-list" class="flex-1 overflow-y-auto divide-y divide-slate-100">
+        <!-- Rendered items will appear here -->
+      </ul>
+
+      <!-- Footer Info Bar -->
+      <div class="p-2.5 bg-slate-50 border-t border-slate-200 text-[11px] text-slate-500 flex items-center justify-between">
+        <span>資料點擊可跳轉至地圖點位</span>
+        <span class="text-slate-400">高雄市環保局開放資料</span>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Statistics Modal -->
+  <div id="stats-modal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in duration-200">
+      <div class="bg-brand-800 text-white px-5 py-4 flex items-center justify-between">
+        <h3 class="font-bold text-base flex items-center gap-2">
+          <i class="fa-solid fa-chart-line text-brand-300"></i> 清運資料統計分析
+        </h3>
+        <button id="close-stats-btn" class="text-brand-200 hover:text-white text-lg">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="p-5 space-y-4 text-xs sm:text-sm">
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 text-center">
+            <span class="text-slate-500 text-xs block mb-1">總清運站點數</span>
+            <span id="stat-total-stops" class="text-2xl font-black text-brand-700">0</span>
+          </div>
+          <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 text-center">
+            <span class="text-slate-500 text-xs block mb-1">覆蓋村里數</span>
+            <span id="stat-total-villages" class="text-2xl font-black text-brand-700">0</span>
+          </div>
+        </div>
+        
+        <div>
+          <h4 class="font-bold text-slate-700 mb-2">行政區站點分布</h4>
+          <div id="stat-district-bars" class="space-y-2"></div>
+        </div>
+
+        <div>
+          <h4 class="font-bold text-slate-700 mb-2">各清運車次統計</h4>
+          <div id="stat-vehicle-list" class="max-h-36 overflow-y-auto space-y-1.5 pr-1"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    // Global Application State
+    let allData = [];
+    let filteredData = [];
+    let map = null;
+    let markersLayer = L.layerGroup();
+    let routePolylineLayer = L.layerGroup();
+    let userLocationMarker = null;
+
+    let selectedDay = "";
+    let showRoutes = false;
+
+    // Expanded Rich Dataset for Gushan & Yancheng District (Full coverage of major roads & villages)
+    const fallbackSampleData = [
+      // 鼓山區 - 哈瑪星 / 臨海 / 濱海 / 哨船頭
+      { Seq: 1, 責任區: "鼓山隊", 車次: "鼓山01", 回收日: "一,四", 停留時間: "16:30-16:40", 停留地點: "鼓山區臨海二路18號", 行政區: "鼓山區", 村里: "哈瑪星里", 經度: 120.2721, 緯度: 22.6225 },
+      { Seq: 2, 責任區: "鼓山隊", 車次: "鼓山01", 回收日: "一,四", 停留時間: "16:45-16:55", 停留地點: "鼓山區濱海一路53號", 行政區: "鼓山區", 村里: "哈瑪星里", 經度: 120.2708, 緯度: 22.6212 },
+      { Seq: 3, 責任區: "鼓山隊", 車次: "鼓山01", 回收日: "一,四", 停留時間: "17:00-17:10", 停留地點: "鼓山區哨船街28號", 行政區: "鼓山區", 村里: "哨船頭里", 經度: 120.2675, 緯度: 22.6201 },
+      { Seq: 4, 責任區: "鼓山隊", 車次: "鼓山01", 回收日: "一,四", 停留時間: "17:15-17:25", 停留地點: "鼓山區蓮海路70號(中山大學門口)", 行政區: "鼓山區", 村里: "哨船頭里", 經度: 120.2642, 緯度: 22.6248 },
+      
+      // 鼓山區 - 內惟 / 壽山 / 龍井
+      { Seq: 5, 責任區: "鼓山隊", 車次: "鼓山02", 回收日: "二,五", 停留時間: "17:10-17:20", 停留地點: "鼓山區鼓山三路108號", 行政區: "鼓山區", 村里: "龍井里", 經度: 120.2815, 緯度: 22.6480 },
+      { Seq: 6, 責任區: "鼓山隊", 車次: "鼓山02", 回收日: "二,五", 停留時間: "17:25-17:35", 停留地點: "鼓山區九如四路1420號", 行政區: "鼓山區", 村里: "內惟里", 經度: 120.2830, 緯度: 22.6532 },
+      { Seq: 7, 責任區: "鼓山隊", 車次: "鼓山02", 回收日: "二,五", 停留時間: "17:40-17:50", 停留地點: "鼓山區日昌路55號", 行政區: "鼓山區", 村里: "正德里", 經度: 120.2804, 緯度: 22.6590 },
+      { Seq: 8, 責任區: "鼓山隊", 車次: "鼓山02", 回收日: "二,五", 停留時間: "18:00-18:10", 停留地點: "鼓山區翠華路601號", 行政區: "鼓山區", 村里: "光榮里", 經度: 120.2862, 緯度: 22.6621 },
+
+      // 鼓山區 - 美術館 / 龍水 / 農十七
+      { Seq: 9, 責任區: "鼓山隊", 車次: "鼓山03", 回收日: "三,六", 停留時間: "18:30-18:40", 停留地點: "鼓山區美術館路80號", 行政區: "鼓山區", 村里: "龍水里", 經度: 120.2890, 緯度: 22.6560 },
+      { Seq: 10, 責任區: "鼓山隊", 車次: "鼓山03", 回收日: "三,六", 停留時間: "18:45-18:55", 停留地點: "鼓山區美術東二路210號", 行政區: "鼓山區", 村里: "龍水里", 經度: 120.2925, 緯度: 22.6582 },
+      { Seq: 11, 責任區: "鼓山隊", 車次: "鼓山03", 回收日: "三,六", 停留時間: "19:00-19:10", 停留地點: "鼓山區神農路300號", 行政區: "鼓山區", 村里: "明誠里", 經度: 120.2981, 緯度: 22.6599 },
+      { Seq: 12, 責任區: "鼓山隊", 車次: "鼓山03", 回收日: "三,六", 停留時間: "19:15-19:25", 停留地點: "鼓山區華榮路350號", 行政區: "鼓山區", 村里: "華豐里", 經度: 120.2995, 緯度: 22.6645 },
+
+      // 鹽埕區 - 七賢 / 瀨南 / 新樂 / 大勇
+      { Seq: 13, 責任區: "鹽埕隊", 車次: "鹽埕01", 回收日: "一,四", 停留時間: "17:30-17:40", 停留地點: "鹽埕區七賢三路120號", 行政區: "鹽埕區", 村里: "光明里", 經度: 120.2820, 緯度: 22.6258 },
+      { Seq: 14, 責任區: "鹽埕隊", 車次: "鹽埕01", 回收日: "一,四", 停留時間: "17:45-17:55", 停留地點: "鹽埕區大勇路64號", 行政區: "鹽埕區", 村里: "博愛里", 經度: 120.2835, 緯度: 22.6228 },
+      { Seq: 15, 責任區: "鹽埕隊", 車次: "鹽埕01", 回收日: "一,四", 停留時間: "18:00-18:10", 停留地點: "鹽埕區新樂街198號", 行政區: "鹽埕區", 村里: "新樂里", 經度: 120.2811, 緯度: 22.6241 },
+      { Seq: 16, 責任區: "鹽埕隊", 車次: "鹽埕01", 回收日: "一,四", 停留時間: "18:15-18:25", 停留地點: "鹽埕區瀨南街132號", 行政區: "鹽埕區", 村里: "育仁里", 經度: 120.2842, 緯度: 22.6255 },
+
+      // 鹽埕區 - 五福 / 建國 / 駁二 / 中原
+      { Seq: 17, 責任區: "鹽埕隊", 車次: "鹽埕02", 回收日: "三,六", 停留時間: "18:05-18:15", 停留地點: "鹽埕區建國四路210號", 行政區: "鹽埕區", 村里: "中原里", 經度: 120.2801, 緯度: 22.6285 },
+      { Seq: 18, 責任區: "鹽埕隊", 車次: "鹽埕02", 回收日: "三,六", 停留時間: "18:20-18:30", 停留地點: "鹽埕區五福四路180號", 行政區: "鹽埕區", 村里: "江南里", 經度: 120.2848, 緯度: 22.6210 },
+      { Seq: 19, 責任區: "鹽埕區", 車次: "鹽埕02", 回收日: "三,六", 停留時間: "18:35-18:45", 停留地點: "鹽埕區大義街2號(駁二藝術特區)", 行政區: "鹽埕區", 村里: "港都里", 經度: 120.2868, 緯度: 22.6188 },
+      { Seq: 20, 責任區: "鹽埕隊", 車次: "鹽埕02", 回收日: "三,六", 停留時間: "18:50-19:00", 停留地點: "鹽埕區富野路85號", 行政區: "鹽埕區", 村里: "壽星里", 經度: 120.2818, 緯度: 22.6272 }
+    ];
+
+    function parseFiles(fileList) {
+      let combinedParsed = [];
+      let pending = fileList.length;
+
+      Array.from(fileList).forEach(file => {
+        Papa.parse(file, {
+          header: true,
+          dynamicTyping: true,
+          skipEmptyLines: true,
+          complete: function(results) {
+            if (results.data && results.data.length > 0) {
+              const normalized = results.data.map((row, index) => {
+                // Helper to clean keys from UTF-8 BOM (\ufeff) and spaces
+                const cleanKey = (k) => k ? String(k).replace(/^\ufeff/, '').trim().toLowerCase() : '';
+
+                // Fuzzy finder for common CSV field name variations
+                const getValByKeys = (candidateKeys) => {
+                  for (const candidate of candidateKeys) {
+                    const foundKey = Object.keys(row).find(k => cleanKey(k) === candidate.toLowerCase());
+                    if (foundKey && row[foundKey] !== undefined && row[foundKey] !== null) {
+                      return row[foundKey];
+                    }
+                  }
+                  return '';
+                };
+
+                const lat = parseFloat(getValByKeys(['緯度', '緯度(wgs84)', 'lat', 'latitude', 'y'])) || 0;
+                const lng = parseFloat(getValByKeys(['經度', '經度(wgs84)', 'lng', 'longitude', 'x'])) || 0;
+                const spot = String(getValByKeys(['停留地點', '停留點名稱', '清運點', '地點', '地址', 'location']) || '').trim();
+
+                return {
+                  Seq: parseInt(getValByKeys(['seq', '序號', 'id'])) || (index + 1),
+                  責任區: String(getValByKeys(['責任區', '隊別', '區隊']) || '').trim(),
+                  車次: String(getValByKeys(['車次', '清運路線', '路線', '車號']) || '').trim(),
+                  回收日: String(getValByKeys(['回收日', '回收星期', '資源回收日', '回收時間']) || '').trim(),
+                  停留時間: String(getValByKeys(['停留時間', '抵達時間', '時間', '到達時間']) || '').trim(),
+                  停留地點: spot,
+                  行政區: String(getValByKeys(['行政區', '鄉鎮市區', 'district']) || '').trim(),
+                  村里: String(getValByKeys(['村里', '里別', 'village']) || '').trim(),
+                  經度: lng,
+                  緯度: lat
+                };
+              }).filter(item => item.緯度 > 0 && item.經度 > 0 && item.停留地點 !== '');
+
+              combinedParsed = combinedParsed.concat(normalized);
+            }
+
+            pending--;
+            if (pending === 0) {
+              if (combinedParsed.length > 0) {
+                allData = combinedParsed;
+                localStorage.setItem('kaohsiung_garbage_data', JSON.stringify(allData));
+                document.getElementById('upload-btn-label').textContent = `已成功解析 ${allData.length} 筆地點數據`;
+                updateVillageDropdown();
+                filterData();
+                showToast(`🎉 成功匯入並呈現 ${allData.length} 個垃圾清運站點！`);
+              } else {
+                alert('解析提示：無法找到合法的緯度與經度欄位。請確保 CSV 包含「經度」、「緯度」、「停留地點」等欄位標頭。');
+              }
+            }
+          },
+          error: function(err) {
+            console.error('CSV Parsing Error:', err);
+            pending--;
+          }
+        });
+      });
+    }
+
+    function updateVillageDropdown() {
+      const district = document.getElementById('district-select').value;
+      const villageSelect = document.getElementById('village-select');
+      const currentVal = villageSelect.value;
+      
+      villageSelect.innerHTML = '<option value="">全部村里</option>';
+      
+      const villages = new Set();
+      allData.forEach(item => {
+        if (!district || item.行政區 === district) {
+          if (item.村里) villages.add(item.村里);
+        }
+      });
+
+      Array.from(villages).sort().forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        villageSelect.appendChild(opt);
+      });
+
+      if (Array.from(villages).includes(currentVal)) {
+        villageSelect.value = currentVal;
+      }
+    }
+
+    function filterData() {
+      const district = document.getElementById('district-select').value;
+      const village = document.getElementById('village-select').value;
+      const searchText = document.getElementById('search-input').value.trim().toLowerCase();
+
+      filteredData = allData.filter(item => {
+        if (district && item.行政區 !== district) return false;
+        if (village && item.村里 !== village) return false;
+        if (selectedDay && (!item.回收日 || !item.回收日.includes(selectedDay))) return false;
+        
+        if (searchText) {
+          const matchLoc = item.停留地點 && item.停留地點.toLowerCase().includes(searchText);
+          const matchVil = item.村里 && item.村里.toLowerCase().includes(searchText);
+          const matchVeh = item.車次 && item.車次.toLowerCase().includes(searchText);
+          if (!matchLoc && !matchVil && !matchVeh) return false;
+        }
+
+        return true;
+      });
+
+      render();
+    }
+
+    function render() {
+      markersLayer.clearLayers();
+      routePolylineLayer.clearLayers();
+
+      const listEl = document.getElementById('site-list');
+      listEl.innerHTML = '';
+
+      // Update counter badges
+      const countStr = `${filteredData.length} 筆`;
+      document.getElementById('list-count-badge').textContent = `共 ${countStr}`;
+      document.getElementById('mobile-count').textContent = filteredData.length;
+
+      const emptyNotice = document.getElementById('empty-state-notice');
+      if (filteredData.length === 0) {
+        emptyNotice.classList.remove('hidden');
+        return;
+      } else {
+        emptyNotice.classList.add('hidden');
+      }
+
+      const bounds = L.latLngBounds();
+
+      // Group routes if toggled on
+      const routeGroups = {};
+
+      filteredData.forEach((item, index) => {
+        const latLng = [item.緯度, item.經度];
+        bounds.extend(latLng);
+
+        // Define Color Palette per District
+        const isGushan = item.行政區 === '鼓山區';
+        const markerColorClass = isGushan ? 'bg-emerald-600 text-white' : 'bg-blue-600 text-white';
+
+        // Custom Leaflet Div Icon
+        const customIcon = L.divIcon({
+          className: 'custom-div-icon',
+          html: `
+            <div class="relative group">
+              <div class="w-7 h-7 rounded-full ${markerColorClass} shadow-md flex items-center justify-center font-bold text-xs border-2 border-white hover:scale-125 transition-transform">
+                ${index + 1}
+              </div>
+            </div>
+          `,
+          iconSize: [28, 28],
+          iconAnchor: [14, 14],
+          popupAnchor: [0, -14]
+        });
+
+        // Marker Object
+        const marker = L.marker(latLng, { icon: customIcon });
+
+        // Popup Content Template
+        const popupHtml = `
+          <div class="p-4 w-64 text-slate-800">
+            <div class="flex items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-100">
+              <span class="text-[11px] font-bold px-2 py-0.5 rounded ${isGushan ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}">
+                ${item.行政區} · ${item.村里 || '未標示'}
+              </span>
+              <span class="text-[11px] text-slate-500 font-mono">#${item.Seq}</span>
+            </div>
+            <h3 class="font-bold text-sm text-slate-900 mb-2 leading-snug">${item.停留地點}</h3>
+            
+            <div class="space-y-1.5 text-xs text-slate-600 mb-3">
+              <div class="flex items-center gap-2">
+                <i class="fa-regular fa-clock text-brand-600 w-4"></i>
+                <span>停留時間：<strong>${item.停留時間 || '未知'}</strong></span>
+              </div>
+              <div class="flex items-center gap-2">
+                <i class="fa-solid fa-recycle text-brand-600 w-4"></i>
+                <span>回收日：<strong>${item.回收日 || '全全'}</strong></span>
+              </div>
+              <div class="flex items-center gap-2">
+                <i class="fa-solid fa-truck text-brand-600 w-4"></i>
+                <span>責任區：${item.責任區 || '預設'} / ${item.車次 || '預設'}</span>
+              </div>
+            </div>
+
+            <a href="https://www.google.com/maps/dir/?api=1&destination=${item.緯度},${item.經度}" 
+               target="_blank" 
+               class="block text-center w-full py-1.5 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all">
+              <i class="fa-solid fa-diamond-turn-right mr-1"></i> Google 地圖導航
+            </a>
+          </div>
+        `;
+
+        marker.bindPopup(popupHtml);
+        markersLayer.addLayer(marker);
+
+        // Sidebar Item Elements
+        const li = document.createElement('li');
+        li.className = 'p-3.5 hover:bg-emerald-50/60 transition-colors cursor-pointer group';
+        li.innerHTML = `
+          <div class="flex items-start justify-between gap-2 mb-1">
+            <div class="flex items-center gap-2">
+              <span class="w-5 h-5 rounded-full ${markerColorClass} text-[10px] font-bold flex items-center justify-center flex-none">
+                ${index + 1}
+              </span>
+              <h4 class="font-bold text-xs sm:text-sm text-slate-800 group-hover:text-brand-700 transition-colors leading-snug">
+                ${item.停留地點}
+              </h4>
+            </div>
+          </div>
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 pl-7">
+            <span class="flex items-center gap-1 text-brand-700 font-medium">
+              <i class="fa-regular fa-clock text-[10px]"></i> ${item.停留時間}
+            </span>
+            <span class="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded text-[10px]">
+              ${item.行政區} ${item.村里}
+            </span>
+            <span class="text-slate-400 text-[11px]">
+              📅 回收: ${item.回收日}
+            </span>
+          </div>
+        `;
+
+        li.addEventListener('click', () => {
+          map.setView(latLng, 17, { animate: true });
+          marker.openPopup();
+        });
+
+        listEl.appendChild(li);
+
+        // Group points for polylines if requested
+        const vehicleKey = `${item.行政區}_${item.車次 || 'ALL'}`;
+        if (!routeGroups[vehicleKey]) routeGroups[vehicleKey] = [];
+        routeGroups[vehicleKey].push(latLng);
+      });
+
+      // Render polyline paths if toggled
+      if (showRoutes) {
+        const colors = ['#16a34a', '#2563eb', '#d97706', '#9333ea', '#0891b2', '#e11d48'];
+        let colorIdx = 0;
+        
+        Object.keys(routeGroups).forEach(key => {
+          if (routeGroups[key].length > 1) {
+            const polyline = L.polyline(routeGroups[key], {
+              color: colors[colorIdx % colors.length],
+              weight: 4,
+              opacity: 0.7,
+              dashArray: '6, 8'
+            });
+            routePolylineLayer.addLayer(polyline);
+            colorIdx++;
+          }
+        });
+      }
+
+      // Auto fit bounds
+      if (bounds.isValid()) {
+        map.fitBounds(bounds, { padding: [40, 40] });
+      }
+    }
+
+    function setupEventListeners() {
+      // District select change
+      document.getElementById('district-select').addEventListener('change', () => {
+        updateVillageDropdown();
+        filterData();
+      });
+
+      // Village select change
+      document.getElementById('village-select').addEventListener('change', filterData);
+
+      // Search input change
+      document.getElementById('search-input').addEventListener('input', filterData);
+
+      // Recycling Day Filter Buttons
+      document.querySelectorAll('.day-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const day = e.target.getAttribute('data-day');
+          if (selectedDay === day) {
+            selectedDay = "";
+            e.target.classList.remove('bg-brand-600', 'text-white', 'border-brand-600');
+            e.target.classList.add('text-slate-600');
+          } else {
+            document.querySelectorAll('.day-btn').forEach(b => {
+              b.classList.remove('bg-brand-600', 'text-white', 'border-brand-600');
+              b.classList.add('text-slate-600');
+            });
+            selectedDay = day;
+            e.target.classList.add('bg-brand-600', 'text-white', 'border-brand-600');
+            e.target.classList.remove('text-slate-600');
+          }
+          filterData();
+        });
+      });
+
+      // Reset Button
+      document.getElementById('reset-btn').addEventListener('click', () => {
+        document.getElementById('district-select').value = '';
+        updateVillageDropdown();
+        document.getElementById('village-select').value = '';
+        document.getElementById('search-input').value = '';
+        selectedDay = '';
+        document.querySelectorAll('.day-btn').forEach(b => {
+          b.classList.remove('bg-brand-600', 'text-white', 'border-brand-600');
+          b.classList.add('text-slate-600');
+        });
+        filterData();
+      });
+
+      // Toggle Polyline Routes
+      document.getElementById('toggle-route-btn').addEventListener('click', () => {
+        showRoutes = !showRoutes;
+        document.getElementById('route-status-text').textContent = showRoutes ? '開啟' : '關閉';
+        render();
+      });
+
+      // Fit bounds control
+      document.getElementById('btn-fit-bounds').addEventListener('click', () => {
+        if (filteredData.length > 0) {
+          const bounds = L.latLngBounds(filteredData.map(i => [i.緯度, i.經度]));
+          map.fitBounds(bounds, { padding: [40, 40] });
+        }
+      });
+
+      // User location geolocation
+      document.getElementById('btn-locate-me').addEventListener('click', () => {
+        if ('geolocation' in navigator) {
+          navigator.geolocation.getCurrentPosition((pos) => {
+            const userLat = pos.coords.latitude;
+            const userLng = pos.coords.longitude;
+
+            if (userLocationMarker) map.removeLayer(userLocationMarker);
+
+            userLocationMarker = L.circleMarker([userLat, userLng], {
+              radius: 9,
+              fillColor: '#3b82f6',
+              color: '#ffffff',
+              weight: 3,
+              opacity: 1,
+              fillOpacity: 0.9
+            }).addTo(map).bindPopup('您的當前位置').openPopup();
+
+            map.setView([userLat, userLng], 15);
+          }, (err) => {
+            alert('無法獲取您的位置，請檢查定位權限設定。');
+          });
+        } else {
+          alert('您的瀏覽器不支援定位功能。');
+        }
+      });
+
+      // Stats Modal Toggle
+      document.getElementById('btn-show-stats').addEventListener('click', openStatsModal);
+      document.getElementById('close-stats-btn').addEventListener('click', () => {
+        document.getElementById('stats-modal').classList.add('hidden');
+      });
+    }
+
+    function openStatsModal() {
+      document.getElementById('stats-modal').classList.remove('hidden');
+      
+      document.getElementById('stat-total-stops').textContent = allData.length;
+      
+      const villages = new Set(allData.map(i => i.村里).filter(Boolean));
+      document.getElementById('stat-total-villages').textContent = villages.size;
+
+      // District Counts
+      const gushanCount = allData.filter(i => i.行政區 === '鼓山區').length;
+      const yanchengCount = allData.filter(i => i.行政區 === '鹽埕區').length;
+      const total = allData.length || 1;
+
+      const gushanPct = Math.round((gushanCount / total) * 100);
+      const yanchengPct = Math.round((yanchengCount / total) * 100);
+
+      document.getElementById('stat-district-bars').innerHTML = `
+        <div class="space-y-1">
+          <div class="flex justify-between text-xs font-semibold text-slate-600">
+            <span>鼓山區 (${gushanCount} 站)</span>
+            <span>${gushanPct}%</span>
+          </div>
+          <div class="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
+            <div class="h-full bg-emerald-600" style="width: ${gushanPct}%"></div>
+          </div>
+        </div>
+        <div class="space-y-1">
+          <div class="flex justify-between text-xs font-semibold text-slate-600">
+            <span>鹽埕區 (${yanchengCount} 站)</span>
+            <span>${yanchengPct}%</span>
+          </div>
+          <div class="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
+            <div class="h-full bg-blue-600" style="width: ${yanchengPct}%"></div>
+          </div>
+        </div>
+      `;
+
+      // Vehicle counts
+      const vehicleMap = {};
+      allData.forEach(i => {
+        const v = i.車次 || '一般路線';
+        vehicleMap[v] = (vehicleMap[v] || 0) + 1;
+      });
+
+      document.getElementById('stat-vehicle-list').innerHTML = Object.entries(vehicleMap)
+        .map(([veh, count]) => `
+          <div class="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100 text-xs">
+            <span class="font-bold text-slate-700">${veh}</span>
+            <span class="text-slate-500">${count} 個停靠點</span>
+          </div>
+        `).join('');
+    }
+
+    // Floating Notification Helper
+    function showToast(msg) {
+      const toast = document.createElement('div');
+      toast.className = 'fixed bottom-5 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs px-4 py-2.5 rounded-xl shadow-xl z-50 animate-bounce';
+      toast.textContent = msg;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 3500);
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      initMap();
+      setupCSVUploader();
+      setupEventListeners();
+      loadInitialData();
+    });
+  </script>
+</body>
+</html>
